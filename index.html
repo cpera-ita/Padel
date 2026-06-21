@@ -105,6 +105,25 @@
   }
   .summary-time b{ color: var(--paper); }
 
+  .point-toast{
+    position:fixed;
+    top: calc(env(safe-area-inset-top) + 10px);
+    left:50%; transform: translateX(-50%);
+    font-weight: 800;
+    font-size: 13px;
+    padding: 9px 18px;
+    border-radius: 999px;
+    opacity:0;
+    pointer-events:none;
+    transition: opacity .2s ease, transform .2s ease;
+    white-space:nowrap;
+    z-index: 60;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+  }
+  .point-toast.show{ opacity:1; transform: translateX(-50%) translateY(4px); }
+  .point-toast.winner{ background: var(--win); color: #06281C; }
+  .point-toast.error{ background: var(--err); color: #2A0908; }
+
   /* ---------- History screen ---------- */
   .hist-card{
     background: var(--ink-2);
@@ -654,10 +673,10 @@
 
     <div class="input-panel">
       <div id="step-type">
-        <div class="step-label">Esito dello scambio</div>
+        <div class="step-label">A chi va il punto?</div>
         <div class="type-grid">
-          <button class="type-btn winner" id="btn-pick-winner">WINNER</button>
-          <button class="type-btn error" id="btn-pick-error">ERRORE</button>
+          <button class="type-btn winner" id="btn-pick-favore">A FAVORE</button>
+          <button class="type-btn error" id="btn-pick-contro">A SFAVORE</button>
         </div>
       </div>
 
@@ -781,7 +800,7 @@
 
   let state = freshState();
   let history = [];               // undo stack of serialized state
-  let pendingType = null;         // 'winner' | 'error' during 2-touch flow
+  let pendingDirection = null;    // 'favore' | 'contro' during 2-touch flow
 
   // ---------------------------------------------------------------
   // DOM refs
@@ -935,19 +954,21 @@
     }
   }
 
-  // Core entry point: type = 'winner'|'error', player = 'me'|'partner'|'oppA'|'oppB'
-  function registerPoint(type, player){
+  // Core entry point: direction = 'favore'|'contro' (punto a favore/sfavore della nostra coppia),
+  // player = 'me'|'partner'|'oppA'|'oppB' (chi ha eseguito il colpo).
+  // Winner/errore per le statistiche viene dedotto automaticamente:
+  //   - punto a favore + colpo di un nostro giocatore  -> WINNER per lui
+  //   - punto a favore + colpo di un avversario         -> ERRORE per lui (ci regala il punto)
+  //   - punto a sfavore + colpo di un nostro giocatore  -> ERRORE per lui
+  //   - punto a sfavore + colpo di un avversario        -> WINNER per lui
+  function registerPoint(direction, player){
     snapshot();
 
     const isOurPlayer = (player === 'me' || player === 'partner');
-    let statKey = type === 'winner' ? 'w' : 'e';
-    let pointSide;
-
-    if (isOurPlayer){
-      pointSide = (type === 'winner') ? 'our' : 'their';
-    } else {
-      pointSide = (type === 'winner') ? 'their' : 'our';
-    }
+    const isFavore = direction === 'favore';
+    const isWinnerShot = (isOurPlayer === isFavore);
+    const statKey = isWinnerShot ? 'w' : 'e';
+    const pointSide = isFavore ? 'our' : 'their';
 
     // record stat against the actual player who hit it
     state.stats[player][statKey]++;
@@ -961,6 +982,7 @@
     }
 
     renderMatch();
+    showPointToast(isWinnerShot, player);
 
     if (state.matchOver){
       state.endTime = new Date().toISOString();
@@ -968,6 +990,23 @@
       saveMatchToHistory();
       setTimeout(() => { renderSummary(); showScreen('summary'); }, 350);
     }
+  }
+
+  // Small confirmation pill so it's always clear how a point was classified
+  let pointToastTimer = null;
+  function showPointToast(isWinnerShot, player){
+    let toastEl = document.getElementById('point-toast');
+    if (!toastEl){
+      toastEl = document.createElement('div');
+      toastEl.id = 'point-toast';
+      toastEl.className = 'point-toast';
+      document.body.appendChild(toastEl);
+    }
+    const label = isWinnerShot ? 'Winner' : 'Errore';
+    toastEl.textContent = `${label} — ${players[player]}`;
+    toastEl.className = 'point-toast show ' + (isWinnerShot ? 'winner' : 'error');
+    clearTimeout(pointToastTimer);
+    pointToastTimer = setTimeout(() => toastEl.classList.remove('show'), 1300);
   }
 
   function undoLastPoint(){
@@ -985,28 +1024,30 @@
   const whoBanner = document.getElementById('who-banner');
 
   function resetInputFlow(){
-    pendingType = null;
+    pendingDirection = null;
     stepType.style.display = '';
     stepWho.classList.remove('active');
   }
 
-  document.getElementById('btn-pick-winner').addEventListener('click', () => goToWhoStep('winner'));
-  document.getElementById('btn-pick-error').addEventListener('click', () => goToWhoStep('error'));
+  document.getElementById('btn-pick-favore').addEventListener('click', () => goToWhoStep('favore'));
+  document.getElementById('btn-pick-contro').addEventListener('click', () => goToWhoStep('contro'));
   document.getElementById('btn-who-back').addEventListener('click', resetInputFlow);
 
-  function goToWhoStep(type){
-    pendingType = type;
+  function goToWhoStep(direction){
+    pendingDirection = direction;
     stepType.style.display = 'none';
     stepWho.classList.add('active');
-    whoBanner.textContent = type === 'winner' ? 'WINNER — chi l\u2019ha fatto?' : 'ERRORE — chi l\u2019ha fatto?';
-    whoBanner.className = 'who-banner ' + type;
+    whoBanner.textContent = direction === 'favore'
+      ? 'PUNTO A FAVORE — chi ha eseguito il colpo?'
+      : 'PUNTO A SFAVORE — chi ha eseguito il colpo?';
+    whoBanner.className = 'who-banner ' + (direction === 'favore' ? 'winner' : 'error');
   }
 
   document.querySelectorAll('.who-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (!pendingType) return;
+      if (!pendingDirection) return;
       const player = btn.getAttribute('data-player');
-      registerPoint(pendingType, player);
+      registerPoint(pendingDirection, player);
       resetInputFlow();
     });
   });
