@@ -1,4 +1,4 @@
-const CACHE_NAME = "padel-app-v1";
+const CACHE_NAME = "padel-app-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -28,10 +28,28 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Cache-first for app shell, falling back to network. This keeps the app
-// fully usable courtside with no signal once it's been opened at least once.
+// HTML pages: network-first, so a fresh deploy is picked up the moment
+// there's a connection courtside. Falls back to the cached copy offline.
+// Static assets (icons, manifest): cache-first, since they rarely change
+// and this keeps the app instantly responsive.
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+
+  const isHTML = event.request.mode === "navigate" ||
+    (event.request.headers.get("accept") || "").includes("text/html");
+
+  if (isHTML) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          return response;
+        })
+        .catch(() => caches.match(event.request).then((cached) => cached || caches.match("./index.html")))
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
